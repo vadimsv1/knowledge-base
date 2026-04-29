@@ -2,11 +2,17 @@
 
 Convert a folder of mixed documents (PDF, DOCX, XLSX, PPTX, images, Visio) into clean, structured Markdown — ready to feed an LLM as a personal or corporate knowledge base.
 
-Built around a **hybrid pipeline**: free local extraction (`pymupdf4llm`, `mammoth`, `openpyxl`) for text-only content, and the Claude Vision API only for pages that actually contain images, scans, or diagrams. On a typical text-heavy corpus you pay **~$0.02 per visual page** and **$0 for everything else**.
+Built around a **two-tier hybrid pipeline**:
+
+1. **Routing hybrid** — free local extraction (`pymupdf4llm`, `mammoth`, `openpyxl`) for text-only content; Claude Vision API only for pages that actually contain images, scans, or diagrams. Saves **80–95 %** on API cost vs. naive image-to-LLM pipelines.
+2. **Vision hybrid** — when a page goes to Vision, **Google Cloud Vision OCR** extracts character-perfect text first, then **Claude Vision** is called with that OCR text injected into the prompt as ground truth. You get **exact character recognition** (Google's strength) **placed inside semantically structured Markdown** (Claude's strength). Most projects skip this layer and let Claude guess every character from pixels — this one doesn't.
+
+On a typical text-heavy corpus you pay **~$0.02 per visual page** and **$0 for everything else**. Adding Google OCR adds ~9 % to per-page Vision cost in exchange for character-perfect numeric IDs, codes, and dense tables.
 
 - Cross-platform (Windows / macOS / Linux / WSL)
 - Crash-safe with MD5-tracked state — re-runs pick up where they stopped
 - Per-file budget cap on API spend
+- Purely additive Google OCR layer — toggled by a single env var, falls back gracefully on every error
 - Optional one-click installer for fresh Windows machines (`deploy/`)
 
 ---
@@ -26,7 +32,7 @@ Built around a **hybrid pipeline**: free local extraction (`pymupdf4llm`, `mammo
 - [Output format](#output-format)
 - [State management](#state-management)
 - [Cost model](#cost-model)
-- [Optional: Google Vision OCR for higher text accuracy](#optional-google-vision-ocr-for-higher-text-accuracy)
+- [Hybrid Vision: Google OCR + Claude Vision](#hybrid-vision-google-ocr--claude-vision)
 - [Wiki compilation (Stage 3)](#wiki-compilation-stage-3)
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
@@ -37,7 +43,8 @@ Built around a **hybrid pipeline**: free local extraction (`pymupdf4llm`, `mammo
 
 ## Features
 
-- **Per-page routing for PDFs** — text-only pages use free local extraction; pages with images, scans, or vector diagrams go through Vision API
+- **Hybrid Vision (Google OCR + Claude Vision)** — opt-in second-pass that grounds Claude's visual understanding with character-perfect OCR text from Google Cloud Vision. Eliminates the "Claude guesses long IDs from pixels" problem on technical/numeric content. See [Hybrid Vision](#hybrid-vision-google-ocr--claude-vision) below.
+- **Per-page routing for PDFs** — text-only pages use free local extraction; pages with images, scans, or vector diagrams go through Vision API. Saves 80–95 % of API spend vs. sending every page to Vision.
 - **Context bridging** — the last 200 chars of the previous page are passed to the next Vision call so tables and paragraphs don't break at page boundaries
 - **DOCX inline images** — image descriptions are inserted at their **exact position** in the text via mammoth's `convert_image` callback, not appended at the end
 - **XLSX preserved verbatim** — every sheet, every cell, as a Markdown table; no API calls
@@ -50,14 +57,20 @@ Built around a **hybrid pipeline**: free local extraction (`pymupdf4llm`, `mammo
 
 ## How it works
 
+Two tiers of hybrid logic.
+
+### Tier 1 — Routing hybrid (always on)
+
+Every page is analyzed locally first to decide which engine processes it.
+
 ```
-rawdocs/  →  sort by type  →  hybrid conversion  →  md_ready/
+rawdocs/  →  sort by type  →  per-page analysis  →  md_ready/
                                      │
                            ┌─────────┴─────────┐
                            │                   │
                      Text pages            Visual pages
-                     (pymupdf4llm /        (Claude Vision API,
-                      mammoth /             ~$0.02 / page)
+                     (pymupdf4llm /        (sent to Vision,
+                      mammoth /             see Tier 2 below)
                       openpyxl)
                      FREE, instant
                            │                   │
@@ -69,7 +82,55 @@ rawdocs/  →  sort by type  →  hybrid conversion  →  md_ready/
                                 Final .md
 ```
 
-For PDFs, every page is analyzed locally first: pages that are pure text take the free path; pages with significant images (≥150 px) or vector drawings (≥20 paths) take the Vision path. This routing typically saves **80–95 %** on API costs versus sending every page through Vision.
+A PDF page is routed to Vision only if it has significant images (≥150 px), vector drawings (≥20 paths), or very little text (<80 chars). Everything else takes the free path. This typically saves **80–95 %** on API cost vs. sending every page to Vision.
+
+### Tier 2 — Vision hybrid (opt-in via `GOOGLE_API_KEY`)
+
+When a page does need Vision, the call itself is hybrid: Google OCR extracts exact text, Claude Vision interprets structure.
+
+```
+                       Image (rendered @ 300 DPI, ≤3000 px, base64 PNG)
+                                          │
+                                          ▼
+                          ┌──── GOOGLE_API_KEY set? ────┐
+                          │                             │
+                         No                            Yes
+                          │                             │
+                          │                             ▼
+                          │              ┌─────────────────────────────┐
+                          │              │ Google Cloud Vision         │
+                          │              │ DOCUMENT_TEXT_DETECTION     │
+                          │              │ → exact characters          │
+                          │              │   (numbers, IDs, codes,     │
+                          │              │    dense tables)            │
+                          │              └──────────────┬──────────────┘
+                          │                             │
+                          │                             ▼
+                          │              ┌─────────────────────────────┐
+                          │              │ Inject OCR text into the    │
+                          │              │ Claude prompt as ground     │
+                          │              │ truth ("use these verbatim")│
+                          │              └──────────────┬──────────────┘
+                          │                             │
+                          └────────────┬────────────────┘
+                                       ▼
+                       ┌────────────────────────────────────┐
+                       │ Claude Vision (Sonnet)             │
+                       │ → structured Markdown              │
+                       │   - tables, headings, layout       │
+                       │   - diagrams + flowcharts          │
+                       │   - language preserved             │
+                       └────────────────────────────────────┘
+                                       │
+                                       ▼
+                                Markdown for this page
+```
+
+**Why this matters:** Claude Vision is excellent at structure, layout, and meaning, but can drift on long alphanumeric strings (transaction IDs, hex codes, parameter lists, fine print). Google OCR returns those character-perfect but has no idea what's a heading vs. a caption. Combined, you get exact text placed correctly inside semantically structured Markdown.
+
+Most public projects that use Claude Vision skip this layer — they send pixels to Claude and hope. Adding a deterministic OCR pass with prompt-level grounding fixes that, for ~9 % extra cost per Vision call.
+
+The Google OCR layer is **purely additive**: if `GOOGLE_API_KEY` is unset, or if the OCR call fails for any reason, Claude is called alone with the original prompt. You never get worse output from enabling it.
 
 ---
 
@@ -224,11 +285,11 @@ All configuration is via environment variables (or an optional `config/api_keys.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Required for any Vision API call | — |
+| `ANTHROPIC_API_KEY` | **Required** for any Vision API call | — |
+| `GOOGLE_API_KEY` | **Recommended** — enables [Hybrid Vision](#hybrid-vision-google-ocr--claude-vision) (Google OCR + Claude). Pure upside, ~9 % extra cost per Vision call. | — (off) |
 | `KB_PROJECT_DIR` | Override project root | parent of `scripts/` directory |
 | `KB_MODEL` | Claude model to use | `claude-sonnet-4-6` |
 | `KB_MAX_TOKENS` | Max output tokens per Vision call | `8192` |
-| `GOOGLE_API_KEY` | Optional — enables Google Vision OCR for higher text accuracy on diagrams | — (off) |
 
 Alternatively, place a `config/api_keys.json` like:
 
@@ -327,13 +388,82 @@ Use `--max-budget` to enforce a hard ceiling. The pipeline stops cleanly mid-run
 
 ---
 
-## Optional: Google Vision OCR for higher text accuracy
+## Hybrid Vision: Google OCR + Claude Vision
 
-For pages with critical numeric codes, identifiers, or tightly-packed text, you can enable a hybrid Google Vision OCR + Claude Vision flow. Google extracts exact text characters; Claude interprets structure and meaning.
+This is the project's most distinctive design choice. **Strongly recommended** for any corpus that contains technical documents, receipts, financial records, code dumps, payment messages, or anything with critical alphanumeric strings.
 
-Set `GOOGLE_API_KEY` and the pipeline will automatically prepend OCR text to each Vision prompt as a reference. No code changes needed.
+### What it is
 
-This is **off by default** — Claude Vision alone is sufficient for most documents.
+When `GOOGLE_API_KEY` is set, every Vision call goes through both engines instead of just Claude:
+
+1. The image is sent to **Google Cloud Vision** (`DOCUMENT_TEXT_DETECTION`). Google returns character-perfect text — every digit, every code, every label — with no semantic interpretation.
+2. That OCR text is **injected at the top of the Claude prompt** with explicit instructions: *"Use these exact text values for all numbers, codes, identifiers, and technical strings. Do NOT guess or approximate — use the OCR values verbatim."*
+3. **Claude Vision** is then called with both the image **and** the OCR text as ground-truth context. Its job becomes: structure this content into Markdown using the OCR text as authoritative for characters, and your visual understanding for layout, tables, diagrams, and meaning.
+
+### Why it works
+
+| Engine | Strength | Weakness |
+|---|---|---|
+| **Claude Vision** | Layout, structure, tables, diagrams, semantic understanding | Can drift on long alphanumeric strings, dense codes, tiny print |
+| **Google OCR** | Pixel-perfect character recognition in any layout | Zero understanding of structure, headings, tables, or meaning |
+| **Combined (this pipeline)** | Exact characters placed inside semantically correct Markdown | None significant — see failure modes below |
+
+You're paying Anthropic to *understand* the page and Google to *transcribe* it. Each does what it's best at; neither has to compensate for the other's weakness.
+
+### Cost economics
+
+| Engine | Per-image cost |
+|---|---|
+| Claude Vision (Sonnet) | ~$0.0168 |
+| Google Vision DOCUMENT_TEXT_DETECTION | $0.0015 (free for first 1,000/month) |
+| **Hybrid total** | **~$0.0183** (≈ +9 % over Claude alone) |
+
+For a 50-page PDF with 5 visual pages, hybrid mode adds roughly **$0.0075** to the run. Almost always worth it on technical content; barely noticeable on prose-heavy material.
+
+### Where the difference shows up
+
+| Content type | Claude alone | + Google OCR |
+|---|---|---|
+| Long numeric IDs (`3.000..4B.280HSMPKHSMPKSig`) | May miss a digit, transpose chars | Character-perfect |
+| Technical parameter lists (`termid,rspcode,SBPTMKPublic,...`) | May drop or rephrase | Exact, verbatim |
+| Receipts, invoices, financial tables | Occasionally rounds or drops | Faithful to source |
+| Small print, footnotes | Often misreads | Reads cleanly |
+| Plain prose paragraphs | Already excellent | Same — no real difference |
+| Diagrams and flowcharts | Already excellent | Same for structure; better for label text |
+
+### Failure modes (defensive by design)
+
+The Google OCR layer is **purely additive** — every failure path falls back to plain Claude Vision automatically:
+
+- **`GOOGLE_API_KEY` unset** → OCR step is skipped, Claude is called alone. No error.
+- **Google API rejects the request, returns an error, or times out** → logged as a warning, OCR returns empty string, Claude is called with the original prompt. No error surfaced to the user.
+- **Google succeeds but returns no text** (blank page, photo of nothing) → no injection happens, Claude is called normally.
+- **Claude Vision fails after retries** → the file is marked as `error` in state and can be retried later with `--retry-errors`. Same behavior with or without the OCR layer.
+
+Bottom line: enabling `GOOGLE_API_KEY` cannot make output *worse* than Claude alone. It can only match or improve it.
+
+### How to enable
+
+```bash
+# 1. Enable the Cloud Vision API in Google Cloud Console
+#    https://console.cloud.google.com/apis/library/vision.googleapis.com
+# 2. Create an API key, restrict it to "Cloud Vision API" only
+# 3. Set the env var:
+
+export GOOGLE_API_KEY="AIza..."        # macOS / Linux / WSL
+$env:GOOGLE_API_KEY = "AIza..."        # Windows PowerShell
+```
+
+That's it. The pipeline auto-detects the variable and starts injecting OCR context on every Vision call. Look for `+ Google OCR context added` in the per-page logs to confirm it's firing.
+
+### When to skip it
+
+Skip the Google OCR layer if your corpus is:
+- Mostly prose (articles, essays, narrative documents)
+- Already-OCRed text PDFs (most modern PDFs — these never reach Vision anyway, see Tier 1 routing)
+- Free-tier sensitive (you don't want to set up a Google Cloud account just to convert a few documents)
+
+For everyone else: turn it on.
 
 ---
 
