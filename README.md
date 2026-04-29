@@ -16,8 +16,10 @@ Built around a **hybrid pipeline**: free local extraction (`pymupdf4llm`, `mammo
 - [Features](#features)
 - [How it works](#how-it-works)
 - [File-type support](#file-type-support)
-- [Quick start](#quick-start)
-- [One-click setup on a fresh Windows machine](#one-click-setup-on-a-fresh-windows-machine)
+- [Installation — pick your path](#installation--pick-your-path)
+  - [Option 1 — Native install (any OS, recommended)](#option-1--native-install-any-os-recommended)
+  - [Option 2 — Windows one-click installer (WSL + Ubuntu + Claude Code)](#option-2--windows-one-click-installer-wsl--ubuntu--claude-code)
+  - [Which option should you pick?](#which-option-should-you-pick)
 - [Usage](#usage)
 - [Configuration](#configuration)
 - [Project layout](#project-layout)
@@ -87,37 +89,70 @@ Old binary formats (`.doc`, `.xls`, `.ppt`) are routed through the same converte
 
 ---
 
-## Quick start
+## Installation — pick your path
 
-Works on any OS with Python 3.10+ and a Claude API key.
+You have two ways to get this running. **Most users want Option 1.** Option 2 is a convenience installer for fresh Windows machines that also want Claude Code CLI bundled in.
 
-```bash
-# 1. Clone
-git clone https://github.com/<your-username>/knowledge-base.git
-cd knowledge-base
-
-# 2. Install dependencies
-pip install pymupdf pymupdf4llm mammoth openpyxl python-pptx Pillow anthropic
-
-# 3. Set your API key
-export ANTHROPIC_API_KEY="sk-ant-..."          # macOS / Linux / WSL
-# $env:ANTHROPIC_API_KEY = "sk-ant-..."        # Windows PowerShell
-
-# 4. Drop files into rawdocs/, then run
-python scripts/convert.py
-```
-
-Output appears in `md_ready/`, one Markdown file per source document.
-
-The project root is auto-detected from the script location — clone it anywhere and it just works.
+> **Note:** WSL is **not required** to run this project. The converter is pure Python and runs natively on Windows, macOS, Linux, or WSL — anywhere Python runs. WSL only appears in Option 2 because that bundle also installs the Claude Code CLI in a clean Linux environment for convenience.
 
 ---
 
-## One-click setup on a fresh Windows machine
+### Option 1 — Native install (any OS, recommended)
 
-For a Windows 10/11 box with **no Python, no WSL, no Node**, the `deploy/` folder bootstraps the entire stack.
+Works on **Windows / macOS / Linux / WSL**, with no privileged operations and no extra moving parts. The only requirement is Python 3.10+ and a Claude API key.
 
-### Step 1 — Enable WSL2 + Ubuntu (Admin PowerShell)
+**1. Clone the repo**
+
+```bash
+git clone https://github.com/vadimsv1/knowledge-base.git
+cd knowledge-base
+```
+
+**2. Install Python dependencies**
+
+```bash
+pip install pymupdf pymupdf4llm mammoth openpyxl python-pptx Pillow anthropic
+```
+
+> On externally-managed Python (some Linux distros), add `--break-system-packages` or use a virtualenv:
+> ```bash
+> python -m venv .venv && source .venv/bin/activate   # macOS / Linux / WSL
+> python -m venv .venv && .venv\Scripts\activate      # Windows PowerShell
+> pip install pymupdf pymupdf4llm mammoth openpyxl python-pptx Pillow anthropic
+> ```
+
+**3. Set your API key**
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."          # macOS / Linux / WSL
+$env:ANTHROPIC_API_KEY = "sk-ant-..."          # Windows PowerShell
+set ANTHROPIC_API_KEY=sk-ant-...               # Windows cmd.exe
+```
+
+**4. Drop files into `rawdocs/` and run**
+
+```bash
+python scripts/convert.py
+```
+
+Output appears in `md_ready/`, one Markdown file per source document. The project root is auto-detected from the script location — clone the repo anywhere and it just works.
+
+**That's it.** No WSL, no admin rights, no system tweaks.
+
+---
+
+### Option 2 — Windows one-click installer (WSL + Ubuntu + Claude Code)
+
+For a Windows 10/11 machine with **no Python, no WSL, no Node** that you want to set up end-to-end in one go, including the Claude Code CLI for interactive use. The `deploy/` folder bootstraps the entire stack inside WSL2 + Ubuntu 24.04.
+
+This option is useful if you:
+- Want everything (Python deps + Claude Code CLI) installed in one shot
+- Are setting up a brand-new Windows machine
+- Prefer a Linux-style dev environment for working with the project
+
+It is **not necessary** to use this option just to run the converter — Option 1 works on Windows natively.
+
+**Step 1 — Enable WSL2 + install Ubuntu** *(Admin PowerShell)*
 
 ```powershell
 cd C:\dev\knowledge-base\deploy
@@ -125,22 +160,22 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\01-setup-wsl.ps1
 ```
 
-**Reboot** when prompted.
+Reboot when prompted.
 
-### Step 2 — Install project + dependencies + Claude Code (Admin PowerShell)
+**Step 2 — Install project + Python deps + Claude Code** *(Admin PowerShell, after reboot)*
 
 ```powershell
 cd C:\dev\knowledge-base\deploy
 .\02-setup-project.ps1
 ```
 
-This will:
+This script will:
 1. Create `C:\dev\knowledge-base\` and all subdirectories
 2. Copy `scripts/`, `CLAUDE.md`, `deploy/` into place
 3. Run `03-setup-ubuntu.sh` inside WSL to install Python deps + Claude Code CLI
 4. Prompt you for your `ANTHROPIC_API_KEY` and save it to `~/.bashrc`
 
-### Step 3 — Use it
+**Step 3 — Daily use**
 
 ```powershell
 .\04-launch.ps1          # Launch Claude Code in the project
@@ -149,7 +184,21 @@ This will:
 
 Full deployment details and troubleshooting in [`deploy/README.md`](deploy/README.md).
 
-> The deploy scripts assume `C:\dev\knowledge-base\` as the install path. If you want it elsewhere, install manually using the [Quick start](#quick-start) above instead.
+> The deploy scripts assume `C:\dev\knowledge-base\` as the install path. If you want it elsewhere, use Option 1 instead.
+
+---
+
+### Which option should you pick?
+
+| You are… | Pick |
+|---|---|
+| On macOS or Linux | **Option 1** |
+| On Windows and already have Python 3.10+ | **Option 1** |
+| On Windows, want a quick run with no system changes | **Option 1** (one `pip install`, done) |
+| On a fresh Windows machine with no Python / no Node, and want everything (including Claude Code CLI) bundled | **Option 2** |
+| Inside WSL already and comfortable there | **Option 1** (run the bash commands inside WSL) |
+
+If unsure, **start with Option 1**. You can always layer Option 2's Claude Code CLI on top later if you decide you want it.
 
 ---
 
