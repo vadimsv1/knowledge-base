@@ -1,0 +1,31 @@
+# Secrets / state
+config/settings.json
+config/convert_state.json
+config/api_keys.json
+
+# User content (private)
+rawdocs/*
+New folder/
+sorted/
+md_ready/*
+wiki/*
+logs/*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local project status / personal notes
+PROJECT_STATUS.md
+NOTES.md
+TODO.md
+*.local.md
+
+# Keep placeholder files
+!rawdocs/.gitkeep
+!md_ready/.gitkeep
+!wiki/.gitkeep
+!config/.gitkeep
+!logs/.gitkeep
